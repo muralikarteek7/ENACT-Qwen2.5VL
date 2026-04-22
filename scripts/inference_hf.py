@@ -95,8 +95,10 @@ def main():
     parser.add_argument("--resume",     action="store_true")
     parser.add_argument("--id-file",    default=None,
                         help="JSON file with split_ids (from finetune). Use with --split train|val to filter samples.")
-    parser.add_argument("--split",      default=None, choices=["train", "val"],
+    parser.add_argument("--split",      default=None, choices=["train", "val", "test"],
                         help="Which split to run (requires --id-file)")
+    parser.add_argument("--image-size", type=int, default=336,
+                        help="Max image edge in pixels — must match what was used during training (default 336)")
     parser.add_argument("--prefetch",   type=int, default=4,
                         help="CPU prefetch workers for image loading (default 4)")
     parser.add_argument("--shard",      type=int, default=0,  help="This shard index (0-indexed)")
@@ -104,6 +106,22 @@ def main():
     parser.add_argument("--run-shards", type=int, default=None,
                         help="Launch N shards as subprocesses (one per GPU), then merge")
     args = parser.parse_args()
+
+    # Auto-load image_size from train_config.json if adapter is given and flag wasn't explicitly set
+    if args.adapter:
+        train_config_path = Path(args.adapter) / "train_config.json"
+        if train_config_path.exists():
+            with open(train_config_path) as f:
+                train_cfg = json.load(f)
+            loaded_size = train_cfg.get("image_size")
+            if loaded_size and loaded_size != args.image_size:
+                print(f"[train_config] Overriding --image-size {args.image_size} → {loaded_size} (matched to training)")
+                args.image_size = loaded_size
+            elif loaded_size:
+                print(f"[train_config] image_size={loaded_size}px (matches training)")
+        else:
+            print(f"WARNING: No train_config.json found in {args.adapter} — using --image-size {args.image_size}. "
+                  f"Make sure this matches the resolution used during training.")
 
     if args.run_shards:
         run_shards(args.run_shards, args)
@@ -154,8 +172,12 @@ def main():
         model = model.merge_and_unload()
 
     processor = AutoProcessor.from_pretrained(args.model)
+    processor.image_processor.size = {
+        "shortest_edge": args.image_size * args.image_size // 4,
+        "longest_edge":  args.image_size * args.image_size,
+    }
     model.eval()
-    print("Model ready.")
+    print(f"Model ready. Image size: {args.image_size}px")
 
     with open(args.input) as f:
         all_samples = [json.loads(line) for line in f]
@@ -236,7 +258,9 @@ def main():
                 speeds.append(tok_per_sec)
 
                 answer = parse_answer(raw)
-                out_f.write(json.dumps({**sample, "answer": answer}) + "\n")
+                has_labels = "gt_answer" in sample
+                record = {**sample, "answer": answer} if has_labels else {"id": sample["id"], "answer": answer}
+                out_f.write(json.dumps(record) + "\n")
                 out_f.flush()
 
                 done_count    = i + 1

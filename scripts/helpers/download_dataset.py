@@ -105,13 +105,10 @@ def download_from_gdrive(file_id, output_path, extract_to=None):
         # Clear cache before download to avoid cookie issues
         clear_gdown_cache()
         
-        # Download the file using fuzzy=True for large files
-        url = f"https://drive.google.com/uc?id={file_id}"
         print(f"Downloading from Google Drive...")
         print(f"Note: Large files may take a while and might require confirmation...")
-        
-        # Use fuzzy=True to handle large files and permission issues
-        gdown.download(url, str(output_path), quiet=False, fuzzy=True)
+
+        gdown.download(id=file_id, output=str(output_path), quiet=False)
         
         # Check if file was actually downloaded
         if not output_path.exists() or output_path.stat().st_size == 0:

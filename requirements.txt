@@ -1,32 +1,53 @@
-# Core dependencies
-numpy>=1.20.0
-Pillow>=8.0.0
-tqdm>=4.60.0
-opencv-python>=4.5.0
+# ── Environment: CUDA 12.4, Driver 565.57 (supports up to CUDA 12.7), A100 ────
+# Verified working in Docker image — all versions pinned from live pip list.
 
-# Dataset download dependencies
-gdown>=4.6.0
-huggingface-hub>=0.16.0
+# ── PyTorch (CUDA 12.4 build) ─────────────────────────────────────────────────
+# Install with:
+#   pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 torchaudio==2.5.1+cu124 \
+#       --index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchaudio==2.5.1+cu124
+triton==3.1.0
 
-# ── Inference: Mac (Apple Silicon) ──────────────────────────────────────────
-# pip install mlx-vlm mlx-lm
+# ── Flash Attention 2 ─────────────────────────────────────────────────────────
+# Must be installed AFTER torch. Build from source:
+#   pip install flash-attn==2.8.3 --no-build-isolation
+flash-attn==2.8.3
 
-# ── Inference: Linux/GPU (HuggingFace) ──────────────────────────────────────
-# PyTorch 2.7 + CUDA 12.8 (supports Flash Attention 2)
-# Install via: https://pytorch.org/get-started/locally/
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-transformers>=4.49.0
-accelerate>=0.26.0
-peft>=0.9.0
-qwen-vl-utils>=0.0.8
+# ── Unsloth (fine-tuning backbone) ───────────────────────────────────────────
+# Install with:
+#   pip install unsloth==2026.4.6 unsloth_zoo==2026.4.8
+unsloth==2026.4.6
+unsloth_zoo==2026.4.8
 
-# Flash Attention 2 (CUDA 12.8, torch 2.7 — build from source)
-# pip install flash-attn --no-build-isolation
+# ── HuggingFace stack ────────────────────────────────────────────────────────
+transformers==5.5.0
+accelerate==1.13.0
+peft==0.19.1
+trl==0.24.0
+datasets==4.3.0
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface_hub==1.11.0
+bitsandbytes==0.49.2
 
-# ── Fine-tuning: Linux/GPU ───────────────────────────────────────────────────
-# Unsloth (installs its own torch/triton — follow official guide)
-# pip install unsloth unsloth_zoo
-# pip install trl datasets
+# ── Qwen2.5-VL specific ──────────────────────────────────────────────────────
+qwen-vl-utils==0.0.14
 
-# ── Dev / evaluation only ────────────────────────────────────────────────────
-safetensors>=0.4.0
+# ── Core numerics / vision ───────────────────────────────────────────────────
+numpy==2.4.3
+Pillow==12.1.1
+opencv-python==4.13.0.92
+tqdm==4.66.5
+
+# ── Dataset download ─────────────────────────────────────────────────────────
+gdown==6.0.0
+
+# ── Optional: attention / training speedups ──────────────────────────────────
+xformers==0.0.35
+einops==0.8.2
+
+# ── Dev / evaluation ─────────────────────────────────────────────────────────
+pandas==3.0.2
+matplotlib==3.10.8

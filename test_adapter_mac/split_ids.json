@@ -1,0 +1,18 @@
+{
+  "train": [
+    "bringing_water_1750844141719178_inverse_world_modeling_ordering_3_steps_74388857",
+    "can_meat_1748934139397589_forward_world_modeling_ordering_3_steps_b117a6a4",
+    "can_meat_1748934139397589_forward_world_modeling_ordering_3_steps_90396a30",
+    "assembling_gift_baskets_1749468508582193_inverse_world_modeling_ordering_3_steps_59ccb954",
+    "chopping_wood_1753697466189522_inverse_world_modeling_ordering_3_steps_6d6ca3e2",
+    "putting_away_Halloween_decorations_1747389873610361_inverse_world_modeling_ordering_3_steps_87e7e0c1",
+    "freeze_pies_1750762043202007_forward_world_modeling_ordering_3_steps_05244d0d",
+    "putting_up_Christmas_decorations_inside_1752574067758371_inverse_world_modeling_ordering_3_steps_bb4f20e2",
+    "canning_food_1751278778230696_inverse_world_modeling_ordering_3_steps_6be4bf01"
+  ],
+  "val": [
+    "sorting_vegetables_1753928918914038_forward_world_modeling_ordering_3_steps_a4a7b8eb"
+  ],
+  "seed": 42,
+  "val_split": 0.05
+}

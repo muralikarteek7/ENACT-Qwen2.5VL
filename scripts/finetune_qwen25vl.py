@@ -1,16 +1,16 @@
 """
-Finetune Qwen2.5-VL-7B-Instruct on ENACT ordering task using unsloth + QLoRA.
-Optimized for RTX 5090 32GB VRAM.
+Finetune Qwen2.5-VL-7B-Instruct on ENACT ordering task using unsloth + LoRA.
+Optimized for A100-SXM4-40GB VRAM. Flash Attention 2 is used automatically by unsloth.
 
-Setup (run once on cloud):
+Setup (run once):
     pip install unsloth unsloth_zoo
     pip install trl datasets pillow qwen-vl-utils
 
 Quick test (100 samples, 1 epoch — verify everything works):
-    python finetune_qwen25vl_5090.py --limit 100 --epochs 1 --output ./test_adapter
+    python finetune_qwen25vl.py --limit 100 --epochs 1 --output ./test_adapter
 
 Full training run:
-    python finetune_qwen25vl_5090.py
+    python finetune_qwen25vl.py
 
 After training, download the adapter folder to your Mac:
     scp -P <port> -r user@<ip>:~/ENACT/lora_enact_ordering/ ./
@@ -105,23 +105,27 @@ def main():
     parser.add_argument("--output", default="./lora_enact_ordering",
                         help="Where to save the LoRA adapter")
 
-    # Training hyperparameters — tuned for RTX 5090 32GB
+    # Training hyperparameters — tuned for A100-SXM4-40GB
     parser.add_argument("--epochs",      type=int,   default=3)
-    parser.add_argument("--batch-size",  type=int,   default=12,   # 32GB + 8bit optim allows batch=12
+    parser.add_argument("--batch-size",  type=int,   default=4,    # 40GB BF16 + VL images; increase to 6-8 if VRAM allows
                         help="Per-device train batch size")
-    parser.add_argument("--grad-accum",  type=int,   default=2,    # effective batch = 24
+    parser.add_argument("--grad-accum",  type=int,   default=4,    # effective batch = 16
                         help="Gradient accumulation steps")
     parser.add_argument("--lr",          type=float, default=2e-4)
     parser.add_argument("--max-seq-len", type=int,   default=4096)
-    parser.add_argument("--lora-rank",   type=int,   default=64,   # 32GB allows rank=64
+    parser.add_argument("--lora-rank",   type=int,   default=64,   # 40GB comfortably handles rank=64; try 128 for more capacity
                         help="LoRA rank — higher = more expressive but more VRAM")
 
     # Data
     parser.add_argument("--limit",     type=int,   default=None,
                         help="Limit number of samples (use 100 for quick test)")
-    parser.add_argument("--val-split", type=float, default=0.03,
+    parser.add_argument("--val-split",  type=float, default=0.10,
                         help="Fraction of data to use for validation")
-    parser.add_argument("--seed",      type=int,   default=42)
+    parser.add_argument("--test-split", type=float, default=0.05,
+                        help="Fraction of data to hold out as test (never seen during training)")
+    parser.add_argument("--seed",       type=int,   default=42)
+    parser.add_argument("--image-size", type=int,   default=336,
+                        help="Max image edge in pixels (336=2x faster than 512, fine for activity recognition)")
     parser.add_argument("--hardest-first", action="store_true",
                         help="Sort by most images first (stress test VRAM)")
 
@@ -151,8 +155,8 @@ def main():
         print(f"Removing old weights at {args.output}")
         shutil.rmtree(args.output)
 
-    # Warn if less than 24GB — may OOM with batch_size=8
-    if vram_gb < 24:
+    # Warn if less than 32GB — may OOM with these defaults
+    if vram_gb < 32:
         print(f"WARNING: Only {vram_gb:.1f}GB VRAM detected. "
               f"Consider reducing --batch-size to 2 and --lora-rank to 32.")
 
@@ -162,9 +166,15 @@ def main():
         args.model,
         load_in_4bit=False,
         use_gradient_checkpointing="unsloth",
-        max_seq_length=2048,
+        max_seq_length=args.max_seq_len,          # must match trainer max_seq_length
         device_map={"": 0},                       # force all layers onto GPU 0, no CPU offload
     )
+    # Set image resolution on the processor (controls visual token count)
+    tokenizer.image_processor.size = {
+        "shortest_edge": args.image_size * args.image_size // 4,
+        "longest_edge":  args.image_size * args.image_size,
+    }
+    print(f"Image size: {args.image_size}px  (~{(args.image_size//14)**2 // 4} tokens/image)")
 
     # ── Apply LoRA ────────────────────────────────────────────────────────────
     # Training ALL layer types since 32GB VRAM gives us room
@@ -190,27 +200,51 @@ def main():
 
     random.seed(args.seed)
     random.shuffle(samples)
-    # Sort by image count so batches have similar VRAM cost (avoids OOM on all-10-image batches)
-    samples.sort(key=lambda s: len(s["images"]), reverse=args.hardest_first)
     if args.limit:
         samples = samples[: args.limit]
 
-    val_n          = max(1, int(len(samples) * args.val_split))
-    train_samples  = samples[val_n:]
-    val_samples    = samples[:val_n]
-    print(f"Train: {len(train_samples)}  |  Val: {len(val_samples)}")
+    # Carve test first (completely held out — never touches training or val selection)
+    test_n        = max(1, int(len(samples) * args.test_split)) if args.test_split > 0 else 0
+    test_samples  = samples[:test_n]
+    remaining     = samples[test_n:]
 
-    # Save split IDs so inference can evaluate train vs val separately
-    split_path = Path(args.output) / "split_ids.json"
-    split_path.parent.mkdir(parents=True, exist_ok=True)
+    # Then split remaining into val and train
+    val_n         = max(1, int(len(remaining) * args.val_split))
+    val_samples   = remaining[:val_n]
+    train_samples = remaining[val_n:]
+
+    # Sort each split independently by image count so batches have similar VRAM cost
+    train_samples.sort(key=lambda s: len(s["images"]), reverse=args.hardest_first)
+    val_samples.sort(key=lambda s: len(s["images"]))
+    test_samples.sort(key=lambda s: len(s["images"]))
+    print(f"Train: {len(train_samples)}  |  Val: {len(val_samples)}  |  Test: {len(test_samples)}")
+
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save split IDs so inference can evaluate each split separately
+    split_path = output_dir / "split_ids.json"
     with open(split_path, "w") as f:
         json.dump({
             "train": [s["id"] for s in train_samples],
             "val":   [s["id"] for s in val_samples],
+            "test":  [s["id"] for s in test_samples],
             "seed":  args.seed,
-            "val_split": args.val_split,
+            "val_split":  args.val_split,
+            "test_split": args.test_split,
         }, f, indent=2)
     print(f"Split IDs saved to {split_path}")
+
+    # Save training config so inference can auto-match resolution and seq length
+    train_config_path = output_dir / "train_config.json"
+    with open(train_config_path, "w") as f:
+        json.dump({
+            "model":       args.model,
+            "image_size":  args.image_size,
+            "max_seq_len": args.max_seq_len,
+            "lora_rank":   args.lora_rank,
+        }, f, indent=2)
+    print(f"Train config saved to {train_config_path}")
 
     # ── Build datasets (lazy — images loaded per batch by workers) ────────────
     print("Building datasets (lazy loading — no images preloaded)...")
@@ -231,8 +265,8 @@ def main():
 
             # Training schedule
             num_train_epochs=args.epochs,
-            per_device_train_batch_size=args.batch_size,   # 8 for 32GB
-            gradient_accumulation_steps=args.grad_accum,   # effective batch = 16
+            per_device_train_batch_size=args.batch_size,
+            gradient_accumulation_steps=args.grad_accum,   # effective batch = batch_size × grad_accum
             learning_rate=args.lr,
             warmup_ratio=0.05,
             lr_scheduler_type="cosine",                    # cosine decay
@@ -257,8 +291,8 @@ def main():
 
             # Memory optimization for long sequences
             max_seq_length=args.max_seq_len,
-            dataloader_num_workers=32,                     # parallel data loading (128 cores available)
-            dataloader_pin_memory=False,
+            dataloader_num_workers=32,                     # parallel data loading (90 cores available)
+            dataloader_pin_memory=True,                    # faster H2D transfers on A100
             dataloader_prefetch_factor=2,                  # prefetch batches ahead of GPU
         ),
 
