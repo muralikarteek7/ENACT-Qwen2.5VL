@@ -93,6 +93,10 @@ def main():
     parser.add_argument("--output",  default=None)
     parser.add_argument("--limit",   type=int, default=None)
     parser.add_argument("--resume",     action="store_true")
+    parser.add_argument("--id-file",    default=None,
+                        help="JSON file with split_ids (from finetune). Use with --split train|val to filter samples.")
+    parser.add_argument("--split",      default=None, choices=["train", "val"],
+                        help="Which split to run (requires --id-file)")
     parser.add_argument("--prefetch",   type=int, default=4,
                         help="CPU prefetch workers for image loading (default 4)")
     parser.add_argument("--shard",      type=int, default=0,  help="This shard index (0-indexed)")
@@ -157,6 +161,13 @@ def main():
         all_samples = [json.loads(line) for line in f]
     if args.limit:
         all_samples = all_samples[: args.limit]
+
+    # Filter by train/val split if requested
+    if args.id_file and args.split:
+        with open(args.id_file) as f:
+            split_ids = set(json.load(f)[args.split])
+        all_samples = [s for s in all_samples if s["id"] in split_ids]
+        print(f"Filtered to {args.split} split: {len(all_samples)} samples")
 
     # Assign this shard's slice
     samples = [s for i, s in enumerate(all_samples) if i % args.num_shards == args.shard]

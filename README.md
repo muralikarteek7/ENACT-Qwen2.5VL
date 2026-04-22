@@ -512,16 +512,92 @@ Key hyperparameters (tuned for 32GB VRAM):
 
 ### Inference: Linux/GPU (after fine-tuning)
 
+`scripts/inference_hf.py` runs inference using HuggingFace transformers + PEFT. Works on Linux (CUDA) and Mac (MPS/Apple Silicon).
+
 ```bash
-# Fine-tuned model
+# Fine-tuned model (loads LoRA adapter, merges weights)
 python scripts/inference_hf.py \
     --adapter ./lora_enact_ordering \
     --output enact_finetuned.jsonl
 
-# Base model (for baseline)
+# Base model (no adapter — for baseline comparison)
 python scripts/inference_hf.py \
     --output enact_base.jsonl
+
+# Quick test (first 50 samples)
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --limit 50 --output test.jsonl
+
+# Multi-GPU sharding (2 GPUs → ~2x faster)
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --run-shards 2 --output enact_finetuned.jsonl
 ```
+
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `Qwen/Qwen2.5-VL-7B-Instruct` | Base model ID |
+| `--adapter` | None | Path to LoRA adapter directory |
+| `--input` | `data/QA/enact_ordering.jsonl` | Input QA file |
+| `--data-root` | `data/` | Root for resolving image paths |
+| `--output` | auto-named | Output JSONL file |
+| `--limit` | None | Cap number of samples (for testing) |
+| `--id-file` | None | JSON with `train`/`val` split IDs |
+| `--split` | None | `train` or `val` — filter by split |
+| `--run-shards` | None | Launch N parallel GPU processes |
+| `--prefetch` | 4 | CPU workers for image prefetch |
+
+### Evaluating Train vs Val Split (Measuring Generalization)
+
+After fine-tuning, `split_ids.json` is saved in the adapter directory. Use it to evaluate train and val separately:
+
+```bash
+# Run on validation split only (unseen during training)
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --id-file ./lora_enact_ordering/split_ids.json \
+    --split val \
+    --output enact_val.jsonl
+
+# Run on train split (expect high accuracy = model learned the task)
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --id-file ./lora_enact_ordering/split_ids.json \
+    --split train \
+    --output enact_train.jsonl
+
+# Evaluate both
+enact eval enact_val.jsonl
+enact eval enact_train.jsonl
+```
+
+Val accuracy = true generalization. Large train/val gap = overfitting.
+
+### Run on Dev / Test Sets
+
+```bash
+# Dev set evaluation
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --input data/QA_dev/enact_ordering_dev.jsonl \
+    --data-root data \
+    --output enact_dev.jsonl
+
+# Test set (for leaderboard submission)
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --input data/QA_test/enact_ordering_test.jsonl \
+    --data-root data \
+    --output enact_test.jsonl
+
+enact eval enact_dev.jsonl
+enact eval enact_test.jsonl
+```
+
+> **Note:** The dev set (`QA_dev`) shares IDs with the training QA file (`QA`). Dev accuracy therefore reflects memorization, not generalization. Use the val split from `split_ids.json` or the held-out test set for true evaluation.
 
 ### Inference: Apple Silicon (MLX)
 
@@ -533,6 +609,40 @@ python scripts/inference_mlx.py --output enact_base_mlx.jsonl
 
 # After fine-tuning: convert adapter → MLX, then run inference
 # See scripts/convert_adapter_to_mlx.py for the conversion pipeline
+```
+
+### Fine-Tuning on Mac (Apple Silicon — Experimental)
+
+`scripts/finetune_mac.py` runs QLoRA fine-tuning locally on Mac using HuggingFace + MPS.
+Useful for quick experiments; for serious training use a cloud GPU (RTX 5090 ≈ 100x faster).
+
+```bash
+pip install transformers accelerate peft trl datasets pillow qwen-vl-utils safetensors
+
+# Quick test (10 samples, ~5 minutes on M3/M4/M5 32GB)
+python scripts/finetune_mac.py --limit 10 --epochs 1 --output ./test_adapter_mac
+
+# Small experiment (~1 hour, 200 samples)
+python scripts/finetune_mac.py --limit 200 --epochs 2 --output ./lora_mac_200
+
+# Full dataset (not recommended — very slow on Mac)
+python scripts/finetune_mac.py --output ./lora_mac_full
+```
+
+Key differences from Linux script:
+- Uses `float16` (MPS does NOT support bfloat16)
+- LoRA rank 16 (vs 64) to fit in 32GB unified memory
+- Batch size 1 with grad accumulation 8 (effective batch = 8)
+- Standard `adamw_torch` optimizer (8-bit optimizer not available on MPS)
+- `dataloader_num_workers=0` (MPS requires no forking)
+
+After training, run val inference the same way:
+```bash
+python scripts/inference_hf.py \
+    --adapter ./lora_mac_200 \
+    --id-file ./lora_mac_200/split_ids.json \
+    --split val --output enact_val_mac.jsonl
+enact eval enact_val_mac.jsonl
 ```
 
 ### Transfer Fine-Tuned Weights to Mac

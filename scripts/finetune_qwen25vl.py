@@ -200,6 +200,18 @@ def main():
     val_samples    = samples[:val_n]
     print(f"Train: {len(train_samples)}  |  Val: {len(val_samples)}")
 
+    # Save split IDs so inference can evaluate train vs val separately
+    split_path = Path(args.output) / "split_ids.json"
+    split_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(split_path, "w") as f:
+        json.dump({
+            "train": [s["id"] for s in train_samples],
+            "val":   [s["id"] for s in val_samples],
+            "seed":  args.seed,
+            "val_split": args.val_split,
+        }, f, indent=2)
+    print(f"Split IDs saved to {split_path}")
+
     # ── Build datasets (lazy — images loaded per batch by workers) ────────────
     print("Building datasets (lazy loading — no images preloaded)...")
     train_dataset = ENACTDataset(train_samples, DATA_ROOT)
