@@ -467,6 +467,93 @@ cat data/evaluation/batch_evaluation_summary.json
 
 ---
 
+## Fine-Tuning Qwen2.5-VL-7B on ENACT
+
+This repo includes scripts to fine-tune [Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct) on the ENACT ordering task using QLoRA, and to run inference on both Linux GPU and Apple Silicon.
+
+### Baseline (no fine-tuning)
+
+| Metric | Score |
+|--------|-------|
+| Task Accuracy | 9.93% |
+| Pairwise Accuracy | 33.45% |
+
+### Setup: Linux GPU (CUDA 12.8)
+
+```bash
+# PyTorch 2.7 + CUDA 12.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# Unsloth for QLoRA fine-tuning
+pip install unsloth unsloth_zoo
+pip install trl datasets pillow qwen-vl-utils
+
+# HuggingFace inference deps
+pip install transformers accelerate peft safetensors
+```
+
+### Fine-Tuning (Linux/GPU — RTX 5090 32GB)
+
+```bash
+# Full training run (3 epochs, batch=8, LoRA rank=64)
+python scripts/finetune_qwen25vl.py \
+    --output ./lora_enact_ordering
+
+# Quick test (100 samples, 1 epoch)
+python scripts/finetune_qwen25vl.py \
+    --limit 100 --epochs 1 --output ./test_adapter
+```
+
+Key hyperparameters (tuned for 32GB VRAM):
+- Base model: `unsloth/Qwen2.5-VL-7B-Instruct-bnb-4bit`
+- LoRA rank: 64, alpha: 64
+- Batch size: 8 (effective 16 with grad accumulation)
+- Learning rate: 2e-4, cosine decay, 3 epochs
+
+### Inference: Linux/GPU (after fine-tuning)
+
+```bash
+# Fine-tuned model
+python scripts/inference_hf.py \
+    --adapter ./lora_enact_ordering \
+    --output enact_finetuned.jsonl
+
+# Base model (for baseline)
+python scripts/inference_hf.py \
+    --output enact_base.jsonl
+```
+
+### Inference: Apple Silicon (MLX)
+
+```bash
+pip install mlx-vlm mlx-lm
+
+# Base model (fast, 3-5s/sample on M-series)
+python scripts/inference_mlx.py --output enact_base_mlx.jsonl
+
+# After fine-tuning: convert adapter → MLX, then run inference
+# See scripts/convert_adapter_to_mlx.py for the conversion pipeline
+```
+
+### Transfer Fine-Tuned Weights to Mac
+
+```bash
+# 1. Download LoRA adapter from cloud
+scp -P <port> -r user@<ip>:~/ENACT/lora_enact_ordering/ ./
+
+# 2. Merge + convert to MLX (see scripts/convert_adapter_to_mlx.py)
+python scripts/convert_adapter_to_mlx.py \
+    --adapter ./lora_enact_ordering \
+    --mlx-path ./fused_mlx_model
+
+# 3. Run inference on Mac
+python scripts/inference_mlx.py \
+    --model ./fused_mlx_model \
+    --output enact_finetuned_mlx.jsonl
+```
+
+---
+
 ## Optional: Generate Data Yourself
 
 The ENACT dataset generation follows a multi-stage pipeline. **You can start from any stage** as we provide official intermediate datasets for each stage. Only **Stage 1** (replaying HDF5 files) requires the BEHAVIOR-1K simulator.

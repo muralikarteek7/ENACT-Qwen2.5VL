@@ -12,5 +12,18 @@
 */logs
 **/tmp
 
-
+# Data (large, download separately)
 data/
+
+# Model weights and adapters
+lora_*/
+fused_mlx_model*/
+merged_hf_model/
+*.safetensors
+*.bin
+
+# Inference outputs
+*.jsonl
+
+# Shard logs
+shard_*.log.DS_Store
